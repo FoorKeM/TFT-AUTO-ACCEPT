@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+.build-tmp/
+logs/
+*.log*
+.env
+.env.*
+*.key
+*.p12
+*.pfx

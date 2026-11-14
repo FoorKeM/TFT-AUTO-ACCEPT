@@ -1,0 +1,72 @@
+name: Releases
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Probar, compilar y publicar
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      PYTHONUTF8: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Obtener el código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Preparar Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Instalar las dependencias verificadas
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear .venv' }
+          & .\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudieron instalar las dependencias' }
+
+      - name: Probar y generar TFT AUTO-ACCEPT.exe
+        run: .\build.ps1
+
+      - name: Publicar un release por actualización
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $baseVersion = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ($baseVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+            throw 'VERSION no contiene una versión válida'
+          }
+          $patch = [int]$Matches[3] + [int]$env:GITHUB_RUN_NUMBER - 1
+          $tag = "v$($Matches[1]).$($Matches[2]).$patch"
+          $exe = Join-Path $PWD 'dist\TFT AUTO-ACCEPT.exe'
+          $zip = Join-Path $PWD 'dist\TFT-AUTO-ACCEPT.zip'
+          Compress-Archive -LiteralPath $exe -DestinationPath $zip -Force
+          $checksum = Join-Path $PWD 'dist\SHA256SUMS.txt'
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          # GitHub normaliza el espacio del EXE a un punto al subir el adjunto.
+          @("$hash  TFT.AUTO-ACCEPT.exe", "$zipHash  TFT-AUTO-ACCEPT.zip") | Set-Content -LiteralPath $checksum -Encoding utf8
+
+          # Reejecutar una ejecución exitosa no reemplaza una versión publicada.
+          gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "El release $tag ya está publicado; se conserva."
+            exit 0
+          }
+          gh release create $tag "${exe}#TFT AUTO-ACCEPT.exe" $zip $checksum --target $env:GITHUB_SHA --title "TFT AUTO-ACCEPT $tag" --notes-file RELEASE_NOTES.md --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo publicar el release' }
